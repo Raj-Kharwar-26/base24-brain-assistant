@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Search, FileText, Calendar, Eye, Trash2, Download, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -7,55 +8,10 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDocuments } from '@/contexts/DocumentContext';
 
-interface Document {
-  id: string;
-  name: string;
-  type: string;
-  size: number;
-  uploadDate: Date;
-  status: 'indexed' | 'processing' | 'error';
-  pageCount?: number;
-  category: 'manual' | 'specification' | 'guide' | 'reference';
-}
-
 const DocumentLibrary = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const { documents, removeDocument } = useDocuments();
-
-  // Mock data - in real app this would come from your backend
-  const [documents] = useState<Document[]>([
-    {
-      id: '1',
-      name: 'BASE24 Transaction Processing Guide.pdf',
-      type: 'application/pdf',
-      size: 2400000,
-      uploadDate: new Date('2024-01-15'),
-      status: 'indexed',
-      pageCount: 156,
-      category: 'guide'
-    },
-    {
-      id: '2',
-      name: 'DE_Field_Specifications.docx',
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      size: 890000,
-      uploadDate: new Date('2024-01-20'),
-      status: 'indexed',
-      pageCount: 45,
-      category: 'specification'
-    },
-    {
-      id: '3',
-      name: 'Settlement_Process_Manual.pdf',
-      type: 'application/pdf',
-      size: 1800000,
-      uploadDate: new Date('2024-01-22'),
-      status: 'indexed',
-      pageCount: 89,
-      category: 'manual'
-    }
-  ]);
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
