@@ -4,13 +4,14 @@ import { Upload, MessageCircle, FileText, Search, Brain, Zap } from 'lucide-reac
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useDocuments } from '@/contexts/DocumentContext';
 import DocumentUpload from '@/components/DocumentUpload';
 import ChatInterface from '@/components/ChatInterface';
 import DocumentLibrary from '@/components/DocumentLibrary';
 
 const Index = () => {
   const [activeTab, setActiveTab] = useState('chat');
-  const [documentCount, setDocumentCount] = useState(0);
+  const { documents } = useDocuments();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
@@ -29,7 +30,7 @@ const Index = () => {
             </div>
             <div className="flex items-center space-x-4">
               <div className="text-sm text-slate-300">
-                {documentCount} documents indexed
+                {documents.length} documents indexed
               </div>
               <div className="flex items-center space-x-1 text-green-400">
                 <Zap className="h-4 w-4" />
@@ -61,7 +62,7 @@ const Index = () => {
               <FileText className="h-4 w-4 text-blue-400" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-white">{documentCount}</div>
+              <div className="text-2xl font-bold text-white">{documents.length}</div>
               <p className="text-xs text-slate-400">Total uploaded</p>
             </CardContent>
           </Card>
@@ -112,7 +113,7 @@ const Index = () => {
             </TabsContent>
             
             <TabsContent value="upload" className="mt-6">
-              <DocumentUpload onUploadSuccess={() => setDocumentCount(prev => prev + 1)} />
+              <DocumentUpload />
             </TabsContent>
             
             <TabsContent value="library" className="mt-6">

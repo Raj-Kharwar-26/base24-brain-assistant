@@ -1,9 +1,9 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
+import { useDocuments } from '@/contexts/DocumentContext';
 
 interface Message {
   id: string;
@@ -24,6 +24,7 @@ const ChatInterface = () => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { documents, searchDocuments } = useDocuments();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -32,6 +33,22 @@ const ChatInterface = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  const generateResponse = (userInput: string) => {
+    if (documents.length === 0) {
+      return "I don't see any BASE24 documents uploaded yet. Please upload your documentation using the 'Upload Docs' tab first, then I'll be able to provide specific answers from your documents.";
+    }
+
+    const searchResults = searchDocuments(userInput);
+    
+    if (searchResults.length === 0) {
+      return `I searched through your ${documents.length} uploaded document(s) but couldn't find specific information about "${userInput}". Try rephrasing your question or check if the information might be in a document you haven't uploaded yet.`;
+    }
+
+    // Generate response based on search results
+    const bestMatch = searchResults[0];
+    return `Based on your uploaded BASE24 documentation, here's what I found about "${userInput}":\n\n${bestMatch.excerpt}\n\n(Source: ${bestMatch.document.name})\n\nWould you like me to search for more specific details or do you have other questions?`;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,15 +62,16 @@ const ChatInterface = () => {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const currentInput = inputValue;
     setInputValue('');
     setIsLoading(true);
 
-    // Simulate AI response
+    // Simulate thinking time
     setTimeout(() => {
       const botResponse: Message = {
         id: (Date.now() + 1).toString(),
         type: 'bot',
-        content: `I understand you're asking about "${inputValue}". To provide accurate answers from your BASE24 documentation, please upload your documents first using the "Upload Docs" tab. Once uploaded, I'll be able to search through your specific documentation and provide detailed, contextual answers.`,
+        content: generateResponse(currentInput),
         timestamp: new Date()
       };
       setMessages(prev => [...prev, botResponse]);
@@ -97,7 +115,7 @@ const ChatInterface = () => {
                 : 'bg-slate-700/50 border-slate-600'
             }`}>
               <CardContent className="p-3">
-                <p className="text-white text-sm leading-relaxed">{message.content}</p>
+                <p className="text-white text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
                 <p className="text-xs text-slate-400 mt-2">
                   {message.timestamp.toLocaleTimeString()}
                 </p>
@@ -115,7 +133,7 @@ const ChatInterface = () => {
               <CardContent className="p-3">
                 <div className="flex items-center space-x-2">
                   <Loader2 className="h-4 w-4 text-slate-400 animate-spin" />
-                  <p className="text-slate-400 text-sm">Thinking...</p>
+                  <p className="text-slate-400 text-sm">Searching your documents...</p>
                 </div>
               </CardContent>
             </Card>

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Search, FileText, Calendar, Eye, Trash2, Download, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -6,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useDocuments } from '@/contexts/DocumentContext';
 
 interface Document {
   id: string;
@@ -21,6 +21,7 @@ interface Document {
 const DocumentLibrary = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const { documents, removeDocument } = useDocuments();
 
   // Mock data - in real app this would come from your backend
   const [documents] = useState<Document[]>([
@@ -95,6 +96,10 @@ const DocumentLibrary = () => {
       default:
         return <Badge>Unknown</Badge>;
     }
+  };
+
+  const handleRemoveDocument = (id: string) => {
+    removeDocument(id);
   };
 
   return (
@@ -184,7 +189,12 @@ const DocumentLibrary = () => {
                     <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white">
                       <Download className="h-3 w-3" />
                     </Button>
-                    <Button variant="ghost" size="sm" className="text-slate-400 hover:text-red-400">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="text-slate-400 hover:text-red-400"
+                      onClick={() => handleRemoveDocument(doc.id)}
+                    >
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>

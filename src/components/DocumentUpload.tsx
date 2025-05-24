@@ -1,10 +1,11 @@
-
 import React, { useState, useCallback } from 'react';
 import { Upload, FileText, X, CheckCircle, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
+import { useDocuments } from '@/contexts/DocumentContext';
+import { extractTextFromFile, categorizeDocument } from '@/utils/documentProcessor';
 
 interface UploadedFile {
   id: string;
@@ -15,14 +16,11 @@ interface UploadedFile {
   progress: number;
 }
 
-interface DocumentUploadProps {
-  onUploadSuccess: () => void;
-}
-
-const DocumentUpload: React.FC<DocumentUploadProps> = ({ onUploadSuccess }) => {
+const DocumentUpload: React.FC = () => {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const { toast } = useToast();
+  const { addDocument } = useDocuments();
 
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -60,18 +58,16 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({ onUploadSuccess }) => {
       };
 
       setFiles(prev => [...prev, uploadFile]);
-
-      // Simulate upload and processing
-      simulateUpload(uploadFile.id);
+      simulateUpload(uploadFile.id, file);
     });
   };
 
-  const simulateUpload = (fileId: string) => {
+  const simulateUpload = (fileId: string, file: File) => {
     // Simulate upload progress
     const uploadInterval = setInterval(() => {
-      setFiles(prev => prev.map(file => {
-        if (file.id === fileId && file.status === 'uploading') {
-          const newProgress = Math.min(file.progress + Math.random() * 30, 100);
+      setFiles(prev => prev.map(fileItem => {
+        if (fileItem.id === fileId && fileItem.status === 'uploading') {
+          const newProgress = Math.min(fileItem.progress + Math.random() * 30, 100);
           if (newProgress >= 100) {
             clearInterval(uploadInterval);
             // Start processing phase
@@ -79,37 +75,67 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({ onUploadSuccess }) => {
               setFiles(prev => prev.map(f => 
                 f.id === fileId ? { ...f, status: 'processing', progress: 0 } : f
               ));
-              simulateProcessing(fileId);
+              simulateProcessing(fileId, file);
             }, 500);
-            return { ...file, progress: 100, status: 'uploading' };
+            return { ...fileItem, progress: 100, status: 'uploading' };
           }
-          return { ...file, progress: newProgress };
+          return { ...fileItem, progress: newProgress };
         }
-        return file;
+        return fileItem;
       }));
     }, 200);
   };
 
-  const simulateProcessing = (fileId: string) => {
-    // Simulate AI processing
-    const processingInterval = setInterval(() => {
-      setFiles(prev => prev.map(file => {
-        if (file.id === fileId && file.status === 'processing') {
-          const newProgress = Math.min(file.progress + Math.random() * 25, 100);
-          if (newProgress >= 100) {
-            clearInterval(processingInterval);
-            onUploadSuccess();
-            toast({
-              title: "Document processed successfully",
-              description: `${file.name} has been indexed and is ready for questions.`,
-            });
-            return { ...file, progress: 100, status: 'completed' };
+  const simulateProcessing = async (fileId: string, file: File) => {
+    try {
+      // Extract text content
+      const content = await extractTextFromFile(file);
+      
+      // Simulate processing progress
+      const processingInterval = setInterval(() => {
+        setFiles(prev => prev.map(fileItem => {
+          if (fileItem.id === fileId && fileItem.status === 'processing') {
+            const newProgress = Math.min(fileItem.progress + Math.random() * 25, 100);
+            if (newProgress >= 100) {
+              clearInterval(processingInterval);
+              
+              // Add to document context
+              const processedDoc = {
+                id: fileId,
+                name: file.name,
+                type: file.type,
+                size: file.size,
+                uploadDate: new Date(),
+                status: 'indexed' as const,
+                pageCount: Math.floor(content.length / 500), // Rough estimate
+                category: categorizeDocument(file.name),
+                content: content
+              };
+              
+              addDocument(processedDoc);
+              
+              toast({
+                title: "Document processed successfully",
+                description: `${file.name} has been indexed and is ready for questions.`,
+              });
+              
+              return { ...fileItem, progress: 100, status: 'completed' };
+            }
+            return { ...fileItem, progress: newProgress };
           }
-          return { ...file, progress: newProgress };
-        }
-        return file;
-      }));
-    }, 300);
+          return fileItem;
+        }));
+      }, 300);
+    } catch (error) {
+      setFiles(prev => prev.map(f => 
+        f.id === fileId ? { ...f, status: 'error' } : f
+      ));
+      toast({
+        title: "Processing failed",
+        description: `Failed to process ${file.name}. Please try again.`,
+        variant: "destructive",
+      });
+    }
   };
 
   const removeFile = (fileId: string) => {
