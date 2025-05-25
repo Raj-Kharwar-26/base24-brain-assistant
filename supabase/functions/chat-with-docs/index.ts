@@ -21,21 +21,28 @@ serve(async (req) => {
 
     const { message, sessionId } = await req.json();
     
+    console.log('Chat request:', { message, sessionId });
+    
     // Get auth token from request
-    const authHeader = req.headers.get('Authorization')!;
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      throw new Error('Authorization header required');
+    }
+    
     const token = authHeader.replace('Bearer ', '');
     
-    // Set auth for the client
-    await supabaseClient.auth.setSession({ access_token: token, refresh_token: '' });
-    
-    const { data: { user } } = await supabaseClient.auth.getUser();
-    if (!user) {
+    // Verify the user token
+    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
+    if (userError || !user) {
+      console.error('Auth error:', userError);
       throw new Error('Unauthorized');
     }
 
+    console.log('User authenticated:', user.id);
+
     const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
     if (!openAIApiKey) {
-      throw new Error('OpenAI API key not configured');
+      throw new Error('OpenAI API key not configured. Please add your OpenAI API key in the project settings.');
     }
 
     // Save user message
@@ -47,7 +54,12 @@ serve(async (req) => {
         content: message
       });
 
-    if (userMsgError) throw userMsgError;
+    if (userMsgError) {
+      console.error('Error saving user message:', userMsgError);
+      throw userMsgError;
+    }
+
+    console.log('User message saved');
 
     // Generate embedding for the user's question
     const embeddingResponse = await fetch('https://api.openai.com/v1/embeddings', {
@@ -62,8 +74,16 @@ serve(async (req) => {
       }),
     });
 
+    if (!embeddingResponse.ok) {
+      const errorText = await embeddingResponse.text();
+      console.error('OpenAI embedding error:', errorText);
+      throw new Error(`Failed to generate embedding: ${embeddingResponse.status}`);
+    }
+
     const embeddingData = await embeddingResponse.json();
     const queryEmbedding = embeddingData.data[0].embedding;
+
+    console.log('Query embedding generated');
 
     // Search for relevant document chunks
     const { data: searchResults, error: searchError } = await supabaseClient
@@ -74,12 +94,19 @@ serve(async (req) => {
         filter_user_id: user.id
       });
 
-    if (searchError) throw searchError;
+    if (searchError) {
+      console.error('Search error:', searchError);
+      throw searchError;
+    }
+
+    console.log('Search results:', searchResults?.length || 0, 'chunks found');
 
     // Prepare context from search results
-    const context = searchResults
-      .map((result: any) => `Source: ${result.document_name}\nContent: ${result.content}`)
-      .join('\n\n');
+    const context = searchResults && searchResults.length > 0
+      ? searchResults
+          .map((result: any) => `Source: ${result.document_name}\nContent: ${result.content}`)
+          .join('\n\n')
+      : 'No relevant documents found in your library.';
 
     // Generate response using OpenAI
     const systemPrompt = `You are a helpful BASE24 documentation assistant. Answer questions based on the provided context from the user's uploaded documents. If the context doesn't contain relevant information, say so clearly.
@@ -110,15 +137,25 @@ Instructions:
       }),
     });
 
+    if (!chatResponse.ok) {
+      const errorText = await chatResponse.text();
+      console.error('OpenAI chat error:', errorText);
+      throw new Error(`Failed to generate response: ${chatResponse.status}`);
+    }
+
     const chatData = await chatResponse.json();
     const assistantMessage = chatData.choices[0].message.content;
 
+    console.log('Assistant response generated');
+
     // Save assistant response with sources
-    const sources = searchResults.map((result: any) => ({
-      documentName: result.document_name,
-      similarity: result.similarity,
-      content: result.content.substring(0, 200) + '...'
-    }));
+    const sources = searchResults && searchResults.length > 0
+      ? searchResults.map((result: any) => ({
+          documentName: result.document_name,
+          similarity: result.similarity,
+          content: result.content.substring(0, 200) + '...'
+        }))
+      : [];
 
     const { error: assistantMsgError } = await supabaseClient
       .from('chat_messages')
@@ -129,7 +166,12 @@ Instructions:
         sources: sources
       });
 
-    if (assistantMsgError) throw assistantMsgError;
+    if (assistantMsgError) {
+      console.error('Error saving assistant message:', assistantMsgError);
+      throw assistantMsgError;
+    }
+
+    console.log('Assistant message saved');
 
     return new Response(
       JSON.stringify({ 

@@ -60,17 +60,18 @@ serve(async (req) => {
 
     console.log('Document inserted successfully');
 
+    // Get OpenAI API key
+    const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!openAIApiKey) {
+      console.error('OpenAI API key not configured');
+      throw new Error('OpenAI API key not configured. Please add your OpenAI API key in the project settings.');
+    }
+
     // Split content into chunks
     const chunks = splitIntoChunks(content, 1000, 200);
     console.log('Created chunks:', chunks.length);
     
     // Generate embeddings for each chunk
-    const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
-    if (!openAIApiKey) {
-      console.error('OpenAI API key not configured');
-      throw new Error('OpenAI API key not configured');
-    }
-
     const chunksWithEmbeddings = [];
     
     for (let i = 0; i < chunks.length; i++) {
@@ -95,7 +96,7 @@ serve(async (req) => {
         if (!embeddingResponse.ok) {
           const errorText = await embeddingResponse.text();
           console.error('OpenAI API error:', errorText);
-          throw new Error(`OpenAI API error: ${embeddingResponse.status}`);
+          throw new Error(`OpenAI API error: ${embeddingResponse.status} - ${errorText}`);
         }
 
         const embeddingData = await embeddingResponse.json();
@@ -150,7 +151,8 @@ serve(async (req) => {
     
     // Try to update document status to error if we have the documentId
     try {
-      const { documentId } = await req.json();
+      const body = await req.clone().json();
+      const { documentId } = body;
       if (documentId) {
         const supabaseClient = createClient(
           Deno.env.get('SUPABASE_URL') ?? '',
