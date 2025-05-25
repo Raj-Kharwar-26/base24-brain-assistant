@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileText, Loader2, CheckCircle, XCircle } from 'lucide-react';
@@ -89,8 +88,13 @@ const DocumentUpload = () => {
         f.id === fileId ? { ...f, status: 'uploading', progress: 25 } : f
       ));
 
-      // Read file content
-      const content = await readFileContent(file);
+      // For PDF files, we'll send the file as base64
+      let content: string;
+      if (file.type === 'application/pdf') {
+        content = await fileToBase64(file);
+      } else {
+        content = await readFileAsText(file);
+      }
       
       // Update progress
       setUploadedFiles(prev => prev.map(f => 
@@ -109,7 +113,8 @@ const DocumentUpload = () => {
           content: content,
           fileName: file.name,
           fileType: file.type,
-          fileSize: file.size
+          fileSize: file.size,
+          isBase64: file.type === 'application/pdf'
         },
         headers: {
           Authorization: `Bearer ${session.access_token}`,
@@ -137,24 +142,29 @@ const DocumentUpload = () => {
     }
   };
 
-  const readFileContent = (file: File): Promise<string> => {
+  const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove data URL prefix (data:application/pdf;base64,)
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
       reader.onload = (event) => {
         const content = event.target?.result as string;
         resolve(content);
       };
-      
-      reader.onerror = () => {
-        reject(new Error('Failed to read file'));
-      };
-      
-      if (file.type === 'application/pdf') {
-        reader.readAsText(file);
-      } else {
-        reader.readAsText(file);
-      }
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsText(file);
     });
   };
 
