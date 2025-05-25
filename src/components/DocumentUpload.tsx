@@ -1,102 +1,106 @@
 
 import React, { useState, useCallback } from 'react';
-import { Upload, FileText, X, CheckCircle, AlertCircle } from 'lucide-react';
+import { useDropzone } from 'react-dropzone';
+import { Upload, FileText, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
-import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
-import { extractTextFromFile } from '@/utils/documentProcessor';
+import { useAuth } from '@/hooks/useAuth';
 
 interface UploadedFile {
   id: string;
   name: string;
   size: number;
-  type: string;
   status: 'uploading' | 'processing' | 'completed' | 'error';
   progress: number;
   error?: string;
 }
 
-const DocumentUpload: React.FC = () => {
-  const [files, setFiles] = useState<UploadedFile[]>([]);
-  const [isDragActive, setIsDragActive] = useState(false);
+const DocumentUpload = () => {
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const { toast } = useToast();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
 
-  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragActive(false);
-    
-    const droppedFiles = Array.from(e.dataTransfer.files);
-    processFiles(droppedFiles);
-  }, []);
+  const processFiles = useCallback(async (acceptedFiles: File[]) => {
+    if (!session || !user) {
+      toast({
+        title: "Authentication required",
+        description: "Please sign in to upload documents.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(e.target.files || []);
-    processFiles(selectedFiles);
-  }, []);
+    const newFiles: UploadedFile[] = acceptedFiles.map(file => ({
+      id: crypto.randomUUID(),
+      name: file.name,
+      size: file.size,
+      status: 'uploading',
+      progress: 0,
+    }));
 
-  const processFiles = (fileList: File[]) => {
-    const supportedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'];
-    
-    fileList.forEach((file) => {
-      if (!supportedTypes.includes(file.type)) {
-        toast({
-          title: "Unsupported file type",
-          description: `${file.name} is not supported. Please upload PDF, DOCX, or TXT files.`,
-          variant: "destructive",
-        });
-        return;
+    setUploadedFiles(prev => [...prev, ...newFiles]);
+
+    for (const file of acceptedFiles) {
+      const fileId = newFiles.find(f => f.name === file.name)?.id;
+      if (!fileId) continue;
+
+      try {
+        await uploadToSupabase(file, fileId);
+      } catch (error) {
+        console.error('Upload error:', error);
+        setUploadedFiles(prev => prev.map(f => 
+          f.id === fileId 
+            ? { ...f, status: 'error', error: error instanceof Error ? error.message : 'Upload failed' }
+            : f
+        ));
       }
+    }
+  }, [session, user, toast]);
 
-      if (file.size > 10 * 1024 * 1024) { // 10MB limit
-        toast({
-          title: "File too large",
-          description: `${file.name} is too large. Please upload files smaller than 10MB.`,
-          variant: "destructive",
-        });
-        return;
-      }
+  const uploadToSupabase = async (file: File, fileId: string) => {
+    if (!session?.access_token) {
+      throw new Error('No valid session token');
+    }
 
-      const uploadFile: UploadedFile = {
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        status: 'uploading',
-        progress: 0
-      };
+    // Validate file size (10MB limit)
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      throw new Error('File size must be less than 10MB');
+    }
 
-      setFiles(prev => [...prev, uploadFile]);
-      uploadToSupabase(uploadFile.id, file);
-    });
-  };
+    // Validate file type
+    const allowedTypes = [
+      'application/pdf',
+      'text/plain',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    
+    if (!allowedTypes.includes(file.type)) {
+      throw new Error('File type not supported. Please upload PDF, TXT, DOC, or DOCX files.');
+    }
 
-  const uploadToSupabase = async (fileId: string, file: File) => {
     try {
-      if (!session?.access_token) {
-        throw new Error('Authentication required');
-      }
-
-      console.log('Starting file processing for:', file.name);
-      
-      // Extract text content
-      setFiles(prev => prev.map(f => 
+      // Update status to uploading
+      setUploadedFiles(prev => prev.map(f => 
         f.id === fileId ? { ...f, status: 'uploading', progress: 25 } : f
       ));
 
-      const content = await extractTextFromFile(file);
-      
-      console.log('Text extracted, content length:', content.length);
+      // Read file content
+      const content = await readFileContent(file);
       
       // Update progress
-      setFiles(prev => prev.map(f => 
-        f.id === fileId ? { ...f, status: 'processing', progress: 50 } : f
+      setUploadedFiles(prev => prev.map(f => 
+        f.id === fileId ? { ...f, progress: 50 } : f
       ));
 
-      console.log('Calling process-document function...');
+      // Update status to processing
+      setUploadedFiles(prev => prev.map(f => 
+        f.id === fileId ? { ...f, status: 'processing', progress: 75 } : f
+      ));
 
       // Call the process-document edge function
       const { data, error } = await supabase.functions.invoke('process-document', {
@@ -109,182 +113,184 @@ const DocumentUpload: React.FC = () => {
         },
         headers: {
           Authorization: `Bearer ${session.access_token}`,
-        },
+        }
       });
 
-      console.log('Function response:', { data, error });
-
       if (error) {
-        console.error('Function error:', error);
-        throw error;
+        console.error('Processing error:', error);
+        throw new Error(error.message || 'Failed to process document');
       }
 
-      if (!data?.success) {
-        throw new Error(data?.error || 'Processing failed');
-      }
-
-      // Update status to completed
-      setFiles(prev => prev.map(f => 
+      // Update to completed
+      setUploadedFiles(prev => prev.map(f => 
         f.id === fileId ? { ...f, status: 'completed', progress: 100 } : f
       ));
 
       toast({
-        title: "Document processed successfully",
-        description: `${file.name} has been indexed and is ready for questions.`,
+        title: "Document uploaded successfully!",
+        description: `${file.name} has been processed and is ready for chat.`,
       });
 
-    } catch (error: any) {
+    } catch (error) {
       console.error('Upload error:', error);
-      
-      const errorMessage = error?.message || 'Unknown error occurred';
-      
-      setFiles(prev => prev.map(f => 
-        f.id === fileId ? { ...f, status: 'error', error: errorMessage } : f
-      ));
-      
-      toast({
-        title: "Processing failed",
-        description: `Failed to process ${file.name}: ${errorMessage}`,
-        variant: "destructive",
-      });
+      throw error;
     }
   };
 
-  const removeFile = (fileId: string) => {
-    setFiles(prev => prev.filter(file => file.id !== fileId));
+  const readFileContent = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      
+      reader.onload = (event) => {
+        const content = event.target?.result as string;
+        resolve(content);
+      };
+      
+      reader.onerror = () => {
+        reject(new Error('Failed to read file'));
+      };
+      
+      if (file.type === 'application/pdf') {
+        reader.readAsText(file);
+      } else {
+        reader.readAsText(file);
+      }
+    });
   };
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop: processFiles,
+    accept: {
+      'application/pdf': ['.pdf'],
+      'text/plain': ['.txt'],
+      'application/msword': ['.doc'],
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
+    },
+    maxFiles: 5,
+    maxSize: 10 * 1024 * 1024, // 10MB
+  });
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircle className="h-4 w-4 text-green-400" />;
-      case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-400" />;
-      default:
-        return <FileText className="h-4 w-4 text-blue-400" />;
-    }
-  };
-
-  const getStatusText = (status: string, error?: string) => {
-    switch (status) {
-      case 'uploading':
-        return 'Extracting text...';
-      case 'processing':
-        return 'Processing with AI...';
-      case 'completed':
-        return 'Ready for questions';
-      case 'error':
-        return error || 'Error occurred';
-      default:
-        return status;
-    }
-  };
+  if (!user) {
+    return (
+      <Card className="bg-slate-800/50 border-slate-700">
+        <CardContent className="p-8 text-center">
+          <div className="text-slate-400 mb-4">
+            <Upload className="h-12 w-12 mx-auto mb-4" />
+            <p>Please sign in to upload documents.</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">
       {/* Upload Zone */}
-      <Card
-        className={`border-2 border-dashed transition-all duration-200 ${
-          isDragActive
-            ? 'border-blue-400 bg-blue-500/10'
-            : 'border-slate-600 bg-slate-700/30 hover:border-slate-500'
-        }`}
-        onDrop={handleDrop}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setIsDragActive(true);
-        }}
-        onDragLeave={() => setIsDragActive(false)}
-      >
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <Upload className={`h-12 w-12 mb-4 ${isDragActive ? 'text-blue-400' : 'text-slate-400'}`} />
-          <CardTitle className="text-xl text-white mb-2">
-            {isDragActive ? 'Drop your files here' : 'Upload BASE24 Documents'}
-          </CardTitle>
-          <CardDescription className="text-center mb-6 max-w-md">
-            Upload your PDF, DOCX, or TXT files. The AI will process and index them for intelligent questioning.
-          </CardDescription>
-          <div className="flex flex-col sm:flex-row gap-4">
+      <Card className="bg-slate-800/50 border-slate-700">
+        <CardContent className="p-8">
+          <div
+            {...getRootProps()}
+            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer ${
+              isDragActive
+                ? 'border-blue-400 bg-blue-400/10'
+                : 'border-slate-600 hover:border-slate-500'
+            }`}
+          >
+            <input {...getInputProps()} />
+            <Upload className="h-12 w-12 text-slate-400 mx-auto mb-4" />
+            <div className="text-white mb-2">
+              {isDragActive ? (
+                <p>Drop the files here...</p>
+              ) : (
+                <p>Drag & drop your BASE24 documents here, or click to select</p>
+              )}
+            </div>
+            <p className="text-sm text-slate-400 mb-4">
+              Supports PDF, TXT, DOC, DOCX files up to 10MB each
+            </p>
             <Button
-              className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
-              onClick={() => document.getElementById('file-upload')?.click()}
+              variant="outline"
+              className="border-slate-600 text-slate-300 hover:bg-slate-700"
             >
-              <Upload className="h-4 w-4 mr-2" />
               Choose Files
             </Button>
-            <input
-              id="file-upload"
-              type="file"
-              multiple
-              accept=".pdf,.docx,.txt"
-              onChange={handleFileSelect}
-              className="hidden"
-            />
           </div>
-          <p className="text-xs text-slate-500 mt-4">
-            Supported: PDF, DOCX, TXT files up to 10MB each
-          </p>
         </CardContent>
       </Card>
 
-      {/* File List */}
-      {files.length > 0 && (
+      {/* Upload Progress */}
+      {uploadedFiles.length > 0 && (
         <Card className="bg-slate-800/50 border-slate-700">
-          <CardHeader>
-            <CardTitle className="text-white">Processing Files</CardTitle>
-            <CardDescription>
-              Your documents are being uploaded and processed by AI
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {files.map((file) => (
-              <div key={file.id} className="flex items-center space-x-4 p-4 bg-slate-700/50 rounded-lg">
-                <div className="flex-shrink-0">
-                  {getStatusIcon(file.status)}
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-sm font-medium text-white truncate">{file.name}</p>
-                    <span className="text-xs text-slate-400">{formatFileSize(file.size)}</span>
+          <CardContent className="p-6">
+            <h3 className="text-lg font-semibold text-white mb-4">Upload Progress</h3>
+            <div className="space-y-4">
+              {uploadedFiles.map((file) => (
+                <div key={file.id} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <FileText className="h-5 w-5 text-blue-400" />
+                      <div>
+                        <p className="text-white text-sm font-medium">{file.name}</p>
+                        <p className="text-slate-400 text-xs">
+                          {(file.size / 1024 / 1024).toFixed(2)} MB
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {file.status === 'uploading' && (
+                        <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />
+                      )}
+                      {file.status === 'processing' && (
+                        <Loader2 className="h-4 w-4 text-yellow-400 animate-spin" />
+                      )}
+                      {file.status === 'completed' && (
+                        <CheckCircle className="h-4 w-4 text-green-400" />
+                      )}
+                      {file.status === 'error' && (
+                        <XCircle className="h-4 w-4 text-red-400" />
+                      )}
+                      <span className="text-sm text-slate-300 capitalize">
+                        {file.status}
+                      </span>
+                    </div>
                   </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <Progress 
-                      value={file.progress} 
-                      className="flex-1 h-2"
-                    />
-                    <span className="text-xs text-slate-400 w-16">
-                      {Math.round(file.progress)}%
-                    </span>
-                  </div>
-                  
-                  <p className="text-xs text-slate-400 mt-1">
-                    {getStatusText(file.status, file.error)}
-                  </p>
+                  <Progress value={file.progress} className="h-2" />
+                  {file.error && (
+                    <p className="text-red-400 text-sm">{file.error}</p>
+                  )}
                 </div>
-                
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => removeFile(file.id)}
-                  className="text-slate-400 hover:text-white"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
+              ))}
+            </div>
           </CardContent>
         </Card>
       )}
+
+      {/* Instructions */}
+      <Card className="bg-slate-800/50 border-slate-700">
+        <CardContent className="p-6">
+          <h3 className="text-lg font-semibold text-white mb-3">How it works</h3>
+          <div className="space-y-2 text-slate-300">
+            <div className="flex items-start space-x-3">
+              <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm font-medium mt-0.5">
+                1
+              </div>
+              <p>Upload your BASE24 documentation files (PDF, TXT, DOC, DOCX)</p>
+            </div>
+            <div className="flex items-start space-x-3">
+              <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm font-medium mt-0.5">
+                2
+              </div>
+              <p>Documents are processed and chunked for optimal AI retrieval</p>
+            </div>
+            <div className="flex items-start space-x-3">
+              <div className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm font-medium mt-0.5">
+                3
+              </div>
+              <p>Ask questions in the AI Assistant tab and get context-aware answers</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };
