@@ -21,17 +21,24 @@ serve(async (req) => {
 
     const { documentId, content, fileName, fileType, fileSize } = await req.json();
     
+    console.log('Processing document:', { documentId, fileName, fileType, fileSize });
+    
     // Get auth token from request
-    const authHeader = req.headers.get('Authorization')!;
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      throw new Error('Authorization header required');
+    }
+    
     const token = authHeader.replace('Bearer ', '');
     
-    // Set auth for the client
-    await supabaseClient.auth.setSession({ access_token: token, refresh_token: '' });
-    
-    const { data: { user } } = await supabaseClient.auth.getUser();
-    if (!user) {
+    // Verify the user token
+    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
+    if (userError || !user) {
+      console.error('Auth error:', userError);
       throw new Error('Unauthorized');
     }
+
+    console.log('User authenticated:', user.id);
 
     // Insert document into database
     const { error: docError } = await supabaseClient
@@ -46,14 +53,21 @@ serve(async (req) => {
         status: 'processing'
       });
 
-    if (docError) throw docError;
+    if (docError) {
+      console.error('Document insert error:', docError);
+      throw docError;
+    }
+
+    console.log('Document inserted successfully');
 
     // Split content into chunks
     const chunks = splitIntoChunks(content, 1000, 200);
+    console.log('Created chunks:', chunks.length);
     
     // Generate embeddings for each chunk
     const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
     if (!openAIApiKey) {
+      console.error('OpenAI API key not configured');
       throw new Error('OpenAI API key not configured');
     }
 
@@ -62,36 +76,56 @@ serve(async (req) => {
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       
-      // Generate embedding using OpenAI
-      const embeddingResponse = await fetch('https://api.openai.com/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openAIApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'text-embedding-3-small',
-          input: chunk,
-        }),
-      });
+      try {
+        console.log(`Processing chunk ${i + 1}/${chunks.length}`);
+        
+        // Generate embedding using OpenAI
+        const embeddingResponse = await fetch('https://api.openai.com/v1/embeddings', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openAIApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'text-embedding-3-small',
+            input: chunk,
+          }),
+        });
 
-      const embeddingData = await embeddingResponse.json();
-      const embedding = embeddingData.data[0].embedding;
+        if (!embeddingResponse.ok) {
+          const errorText = await embeddingResponse.text();
+          console.error('OpenAI API error:', errorText);
+          throw new Error(`OpenAI API error: ${embeddingResponse.status}`);
+        }
 
-      chunksWithEmbeddings.push({
-        document_id: documentId,
-        chunk_index: i,
-        content: chunk,
-        embedding: embedding,
-      });
+        const embeddingData = await embeddingResponse.json();
+        const embedding = embeddingData.data[0].embedding;
+
+        chunksWithEmbeddings.push({
+          document_id: documentId,
+          chunk_index: i,
+          content: chunk,
+          embedding: embedding,
+        });
+      } catch (error) {
+        console.error(`Error processing chunk ${i}:`, error);
+        throw error;
+      }
     }
+
+    console.log('All embeddings generated, inserting chunks...');
 
     // Insert chunks with embeddings
     const { error: chunksError } = await supabaseClient
       .from('document_chunks')
       .insert(chunksWithEmbeddings);
 
-    if (chunksError) throw chunksError;
+    if (chunksError) {
+      console.error('Chunks insert error:', chunksError);
+      throw chunksError;
+    }
+
+    console.log('Chunks inserted successfully');
 
     // Update document status to indexed
     const { error: updateError } = await supabaseClient
@@ -99,7 +133,12 @@ serve(async (req) => {
       .update({ status: 'indexed' })
       .eq('id', documentId);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      console.error('Document status update error:', updateError);
+      throw updateError;
+    }
+
+    console.log('Document processing completed successfully');
 
     return new Response(
       JSON.stringify({ success: true, chunksCreated: chunks.length }),
@@ -108,6 +147,25 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('Error processing document:', error);
+    
+    // Try to update document status to error if we have the documentId
+    try {
+      const { documentId } = await req.json();
+      if (documentId) {
+        const supabaseClient = createClient(
+          Deno.env.get('SUPABASE_URL') ?? '',
+          Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+        );
+        
+        await supabaseClient
+          .from('documents')
+          .update({ status: 'error' })
+          .eq('id', documentId);
+      }
+    } catch (updateError) {
+      console.error('Error updating document status to error:', updateError);
+    }
+    
     return new Response(
       JSON.stringify({ error: error.message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback } from 'react';
 import { Upload, FileText, X, CheckCircle, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -15,6 +16,7 @@ interface UploadedFile {
   type: string;
   status: 'uploading' | 'processing' | 'completed' | 'error';
   progress: number;
+  error?: string;
 }
 
 const DocumentUpload: React.FC = () => {
@@ -49,6 +51,15 @@ const DocumentUpload: React.FC = () => {
         return;
       }
 
+      if (file.size > 10 * 1024 * 1024) { // 10MB limit
+        toast({
+          title: "File too large",
+          description: `${file.name} is too large. Please upload files smaller than 10MB.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
       const uploadFile: UploadedFile = {
         id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
         name: file.name,
@@ -65,13 +76,27 @@ const DocumentUpload: React.FC = () => {
 
   const uploadToSupabase = async (fileId: string, file: File) => {
     try {
+      if (!session?.access_token) {
+        throw new Error('Authentication required');
+      }
+
+      console.log('Starting file processing for:', file.name);
+      
       // Extract text content
+      setFiles(prev => prev.map(f => 
+        f.id === fileId ? { ...f, status: 'uploading', progress: 25 } : f
+      ));
+
       const content = await extractTextFromFile(file);
+      
+      console.log('Text extracted, content length:', content.length);
       
       // Update progress
       setFiles(prev => prev.map(f => 
         f.id === fileId ? { ...f, status: 'processing', progress: 50 } : f
       ));
+
+      console.log('Calling process-document function...');
 
       // Call the process-document edge function
       const { data, error } = await supabase.functions.invoke('process-document', {
@@ -83,11 +108,20 @@ const DocumentUpload: React.FC = () => {
           fileSize: file.size
         },
         headers: {
-          Authorization: `Bearer ${session?.access_token}`,
+          Authorization: `Bearer ${session.access_token}`,
         },
       });
 
-      if (error) throw error;
+      console.log('Function response:', { data, error });
+
+      if (error) {
+        console.error('Function error:', error);
+        throw error;
+      }
+
+      if (!data?.success) {
+        throw new Error(data?.error || 'Processing failed');
+      }
 
       // Update status to completed
       setFiles(prev => prev.map(f => 
@@ -101,12 +135,16 @@ const DocumentUpload: React.FC = () => {
 
     } catch (error: any) {
       console.error('Upload error:', error);
+      
+      const errorMessage = error?.message || 'Unknown error occurred';
+      
       setFiles(prev => prev.map(f => 
-        f.id === fileId ? { ...f, status: 'error' } : f
+        f.id === fileId ? { ...f, status: 'error', error: errorMessage } : f
       ));
+      
       toast({
         title: "Processing failed",
-        description: `Failed to process ${file.name}. Please try again.`,
+        description: `Failed to process ${file.name}: ${errorMessage}`,
         variant: "destructive",
       });
     }
@@ -135,16 +173,16 @@ const DocumentUpload: React.FC = () => {
     }
   };
 
-  const getStatusText = (status: string) => {
+  const getStatusText = (status: string, error?: string) => {
     switch (status) {
       case 'uploading':
-        return 'Uploading...';
+        return 'Extracting text...';
       case 'processing':
         return 'Processing with AI...';
       case 'completed':
         return 'Ready for questions';
       case 'error':
-        return 'Error occurred';
+        return error || 'Error occurred';
       default:
         return status;
     }
@@ -230,7 +268,7 @@ const DocumentUpload: React.FC = () => {
                   </div>
                   
                   <p className="text-xs text-slate-400 mt-1">
-                    {getStatusText(file.status)}
+                    {getStatusText(file.status, file.error)}
                   </p>
                 </div>
                 
