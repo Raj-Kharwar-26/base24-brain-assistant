@@ -4,8 +4,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
-import { useDocuments } from '@/contexts/DocumentContext';
-import { extractTextFromFile, categorizeDocument } from '@/utils/documentProcessor';
+import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@/integrations/supabase/client';
+import { extractTextFromFile } from '@/utils/documentProcessor';
 
 interface UploadedFile {
   id: string;
@@ -20,7 +21,7 @@ const DocumentUpload: React.FC = () => {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const { toast } = useToast();
-  const { addDocument } = useDocuments();
+  const { session } = useAuth();
 
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -58,75 +59,48 @@ const DocumentUpload: React.FC = () => {
       };
 
       setFiles(prev => [...prev, uploadFile]);
-      simulateUpload(uploadFile.id, file);
+      uploadToSupabase(uploadFile.id, file);
     });
   };
 
-  const simulateUpload = (fileId: string, file: File) => {
-    // Simulate upload progress
-    const uploadInterval = setInterval(() => {
-      setFiles(prev => prev.map(fileItem => {
-        if (fileItem.id === fileId && fileItem.status === 'uploading') {
-          const newProgress = Math.min(fileItem.progress + Math.random() * 30, 100);
-          if (newProgress >= 100) {
-            clearInterval(uploadInterval);
-            // Start processing phase
-            setTimeout(() => {
-              setFiles(prev => prev.map(f => 
-                f.id === fileId ? { ...f, status: 'processing', progress: 0 } : f
-              ));
-              simulateProcessing(fileId, file);
-            }, 500);
-            return { ...fileItem, progress: 100, status: 'uploading' };
-          }
-          return { ...fileItem, progress: newProgress };
-        }
-        return fileItem;
-      }));
-    }, 200);
-  };
-
-  const simulateProcessing = async (fileId: string, file: File) => {
+  const uploadToSupabase = async (fileId: string, file: File) => {
     try {
       // Extract text content
       const content = await extractTextFromFile(file);
       
-      // Simulate processing progress
-      const processingInterval = setInterval(() => {
-        setFiles(prev => prev.map(fileItem => {
-          if (fileItem.id === fileId && fileItem.status === 'processing') {
-            const newProgress = Math.min(fileItem.progress + Math.random() * 25, 100);
-            if (newProgress >= 100) {
-              clearInterval(processingInterval);
-              
-              // Add to document context
-              const processedDoc = {
-                id: fileId,
-                name: file.name,
-                type: file.type,
-                size: file.size,
-                uploadDate: new Date(),
-                status: 'indexed' as const,
-                pageCount: Math.floor(content.length / 500), // Rough estimate
-                category: categorizeDocument(file.name),
-                content: content
-              };
-              
-              addDocument(processedDoc);
-              
-              toast({
-                title: "Document processed successfully",
-                description: `${file.name} has been indexed and is ready for questions.`,
-              });
-              
-              return { ...fileItem, progress: 100, status: 'completed' };
-            }
-            return { ...fileItem, progress: newProgress };
-          }
-          return fileItem;
-        }));
-      }, 300);
-    } catch (error) {
+      // Update progress
+      setFiles(prev => prev.map(f => 
+        f.id === fileId ? { ...f, status: 'processing', progress: 50 } : f
+      ));
+
+      // Call the process-document edge function
+      const { data, error } = await supabase.functions.invoke('process-document', {
+        body: {
+          documentId: fileId,
+          content: content,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size
+        },
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+      });
+
+      if (error) throw error;
+
+      // Update status to completed
+      setFiles(prev => prev.map(f => 
+        f.id === fileId ? { ...f, status: 'completed', progress: 100 } : f
+      ));
+
+      toast({
+        title: "Document processed successfully",
+        description: `${file.name} has been indexed and is ready for questions.`,
+      });
+
+    } catch (error: any) {
+      console.error('Upload error:', error);
       setFiles(prev => prev.map(f => 
         f.id === fileId ? { ...f, status: 'error' } : f
       ));
