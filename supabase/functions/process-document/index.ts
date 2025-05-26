@@ -13,13 +13,17 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  let documentId: string | null = null;
+  
   try {
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { documentId, content, fileName, fileType, fileSize, isBase64 } = await req.json();
+    const requestBody = await req.json();
+    const { documentId: reqDocumentId, content, fileName, fileType, fileSize, isBase64 } = requestBody;
+    documentId = reqDocumentId;
     
     console.log('Processing document:', { documentId, fileName, fileType, fileSize, isBase64 });
     
@@ -46,7 +50,7 @@ serve(async (req) => {
     if (isBase64 && fileType === 'application/pdf') {
       // For PDF files, we'll create a placeholder text since we can't extract text from base64 PDF in edge function
       // In a production environment, you'd use a PDF processing service
-      processedContent = `[PDF Document: ${fileName}]\n\nThis is a BASE24 PDF document. The content has been uploaded and is being processed for AI search capabilities.\n\nCommon BASE24 topics that might be covered:\n- Transaction Processing\n- Field Definitions (DE fields)\n- Message Formats\n- Settlement Procedures\n- Authorization Flows\n- Network Management\n- Security Protocols`;
+      processedContent = `[PDF Document: ${fileName}]\n\nThis is a PDF document that has been uploaded and processed for AI search capabilities.\n\nCommon topics that might be covered:\n- Transaction Processing\n- Field Definitions\n- Message Formats\n- Settlement Procedures\n- Authorization Flows\n- Network Management\n- Security Protocols\n\nTo get specific information from this document, please ask questions in the chat interface.`;
     } else {
       // For text files, use content directly but sanitize it
       processedContent = content.replace(/\u0000/g, ''); // Remove null bytes
@@ -162,10 +166,8 @@ serve(async (req) => {
     console.error('Error processing document:', error);
     
     // Try to update document status to error if we have the documentId
-    try {
-      const requestBody = await req.text();
-      const { documentId } = JSON.parse(requestBody);
-      if (documentId) {
+    if (documentId) {
+      try {
         const supabaseClient = createClient(
           Deno.env.get('SUPABASE_URL') ?? '',
           Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -175,9 +177,9 @@ serve(async (req) => {
           .from('documents')
           .update({ status: 'error' })
           .eq('id', documentId);
+      } catch (updateError) {
+        console.error('Error updating document status to error:', updateError);
       }
-    } catch (updateError) {
-      console.error('Error updating document status to error:', updateError);
     }
     
     return new Response(
