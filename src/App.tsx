@@ -8,6 +8,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { DocumentProvider } from "@/contexts/DocumentContext";
 import AuthForm from "@/components/AuthForm";
 import Index from "./pages/Index";
+import HybridIndex from "./pages/HybridIndex";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
