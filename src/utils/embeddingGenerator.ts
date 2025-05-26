@@ -39,8 +39,8 @@ export const generateEmbedding = async (text: string): Promise<number[]> => {
       normalize: true 
     });
     
-    // Convert to regular array
-    const embedding = Array.from(result.data);
+    // Convert to regular array with proper type assertion
+    const embedding = Array.from(result.data as Float32Array) as number[];
     
     console.log(`Generated embedding for text (length: ${text.length}), embedding dim: ${embedding.length}`);
     return embedding;
